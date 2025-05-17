@@ -8,6 +8,7 @@ mod serde;
 #[cfg(test)]
 mod test_formats;
 
+#[cfg(feature = "arbitrary")]
 use arbitrary::Arbitrary;
 
 #[cfg(target_os = "zkvm")]
