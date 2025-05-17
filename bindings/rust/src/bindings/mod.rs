@@ -144,6 +144,9 @@ impl From<KzgErrors> for Error {
     }
 }
 
+pub type CellsPerExtBlob = [Cell; CELLS_PER_EXT_BLOB];
+pub type ProofsPerExtBlob = [KZGProof; CELLS_PER_EXT_BLOB];
+
 #[derive(Debug)]
 pub enum KzgErrors {
     /// Failed to get current directory.
@@ -368,29 +371,26 @@ impl KZGSettings {
         // Load g1 Lagrange bytes
         g1_lagrange_bytes
             .chunks_mut(BYTES_PER_G1_POINT)
-            .map(|chunk| {
+            .try_for_each(|chunk| {
                 let line = lines.next().ok_or(KzgErrors::FileFormatError)?;
                 hex::decode_to_slice(line, chunk).map_err(|_| KzgErrors::ParseError)
-            })
-            .collect::<Result<(), KzgErrors>>()?;
+            })?;
 
         // Load g2 monomial bytes
         g2_monomial_bytes
             .chunks_mut(BYTES_PER_G2_POINT)
-            .map(|chunk| {
+            .try_for_each(|chunk| {
                 let line = lines.next().ok_or(KzgErrors::FileFormatError)?;
                 hex::decode_to_slice(line, chunk).map_err(|_| KzgErrors::ParseError)
-            })
-            .collect::<Result<(), KzgErrors>>()?;
+            })?;
 
         // Load g1 monomial bytes
         g1_monomial_bytes
             .chunks_mut(BYTES_PER_G1_POINT)
-            .map(|chunk| {
+            .try_for_each(|chunk| {
                 let line = lines.next().ok_or(KzgErrors::FileFormatError)?;
                 hex::decode_to_slice(line, chunk).map_err(|_| KzgErrors::ParseError)
-            })
-            .collect::<Result<(), KzgErrors>>()?;
+            })?;
 
         if lines.next().is_some() {
             return Err(KzgErrors::FileFormatError.into());
@@ -425,7 +425,7 @@ impl KZGSettings {
     #[cfg(not(target_os = "zkvm"))]
     pub fn load_trusted_setup_file_inner(file_path: &CStr, precompute: u64) -> Result<Self, Error> {
         // SAFETY: `b"r\0"` is a valid null-terminated string.
-        const MODE: &CStr = unsafe { CStr::from_bytes_with_nul_unchecked(b"r\0") };
+        const MODE: &CStr = c"r";
 
         // SAFETY:
         // - .as_ptr(): pointer is not dangling because file_path has not been dropped.
@@ -444,7 +444,8 @@ impl KZGSettings {
             )));
         }
         let mut kzg_settings = MaybeUninit::<KZGSettings>::uninit();
-        let result = unsafe {
+
+        unsafe {
             let res = load_trusted_setup_file(kzg_settings.as_mut_ptr(), file_ptr, precompute);
             let _unchecked_close_result = libc::fclose(file_ptr);
 
@@ -455,9 +456,7 @@ impl KZGSettings {
                     "Invalid trusted setup: {res:?}"
                 )))
             }
-        };
-
-        result
+        }
     }
 
     pub fn blob_to_kzg_commitment(&self, blob: &Blob) -> Result<KZGCommitment, Error> {
@@ -597,7 +596,7 @@ impl KZGSettings {
         }
     }
 
-    pub fn compute_cells(&self, blob: &Blob) -> Result<Box<[Cell; CELLS_PER_EXT_BLOB]>, Error> {
+    pub fn compute_cells(&self, blob: &Blob) -> Result<Box<CellsPerExtBlob>, Error> {
         let mut cells = [Cell::default(); CELLS_PER_EXT_BLOB];
         unsafe {
             let res = compute_cells_and_kzg_proofs(cells.as_mut_ptr(), ptr::null_mut(), blob, self);
@@ -612,13 +611,7 @@ impl KZGSettings {
     pub fn compute_cells_and_kzg_proofs(
         &self,
         blob: &Blob,
-    ) -> Result<
-        (
-            Box<[Cell; CELLS_PER_EXT_BLOB]>,
-            Box<[KZGProof; CELLS_PER_EXT_BLOB]>,
-        ),
-        Error,
-    > {
+    ) -> Result<(Box<CellsPerExtBlob>, Box<ProofsPerExtBlob>), Error> {
         let mut cells = [Cell::default(); CELLS_PER_EXT_BLOB];
         let mut proofs = [KZGProof::default(); CELLS_PER_EXT_BLOB];
         unsafe {
@@ -636,13 +629,7 @@ impl KZGSettings {
         &self,
         cell_indices: &[u64],
         cells: &[Cell],
-    ) -> Result<
-        (
-            Box<[Cell; CELLS_PER_EXT_BLOB]>,
-            Box<[KZGProof; CELLS_PER_EXT_BLOB]>,
-        ),
-        Error,
-    > {
+    ) -> Result<(Box<CellsPerExtBlob>, Box<ProofsPerExtBlob>), Error> {
         if cell_indices.len() != cells.len() {
             return Err(Error::MismatchLength(format!(
                 "There are {} cell indices and {} cells",
@@ -977,6 +964,7 @@ impl Deref for KZGCommitment {
     }
 }
 
+#[allow(clippy::derivable_impls)]
 impl Default for Bytes32 {
     fn default() -> Self {
         Bytes32 { bytes: [0; 32] }
@@ -1021,7 +1009,8 @@ impl Default for Cell {
     }
 }
 
-impl Arbitrary<'_> for Bytes32 {
+#[cfg(feature = "arbitrary")]
+impl arbitrary::Arbitrary<'_> for Bytes32 {
     fn arbitrary(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Self> {
         let mut bytes = [0u8; 32];
         u.fill_buffer(&mut bytes)?;
@@ -1029,7 +1018,8 @@ impl Arbitrary<'_> for Bytes32 {
     }
 }
 
-impl Arbitrary<'_> for Bytes48 {
+#[cfg(feature = "arbitrary")]
+impl arbitrary::Arbitrary<'_> for Bytes48 {
     fn arbitrary(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Self> {
         let mut bytes = [0u8; 48];
         u.fill_buffer(&mut bytes)?;
@@ -1037,7 +1027,8 @@ impl Arbitrary<'_> for Bytes48 {
     }
 }
 
-impl Arbitrary<'_> for Blob {
+#[cfg(feature = "arbitrary")]
+impl arbitrary::Arbitrary<'_> for Blob {
     fn arbitrary(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Self> {
         let mut bytes = [0u8; BYTES_PER_BLOB];
         u.fill_buffer(&mut bytes)?;
@@ -1045,7 +1036,8 @@ impl Arbitrary<'_> for Blob {
     }
 }
 
-impl Arbitrary<'_> for Cell {
+#[cfg(feature = "arbitrary")]
+impl arbitrary::Arbitrary<'_> for Cell {
     fn arbitrary(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Self> {
         let mut bytes = [0u8; BYTES_PER_CELL];
         u.fill_buffer(&mut bytes)?;
